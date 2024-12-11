@@ -14,33 +14,36 @@ def clear_console():
     """Clear the console output."""
     console.print("\033[H\033[J", end="")
 
-async def async_input(prompt):
-    """Asynchronous input with buffer handling."""
-    buffer = []
-    while True:
-        clear_console()
-        console.print(f"{prompt}{''.join(buffer)}", end='', style="white")
-        try:
-            # Read a single character asynchronously
-            char = await asyncio.to_thread(sys.stdin.read, 1)
+# async def async_input(prompt):
+#     """Asynchronous input with proper handling."""
+#     buffer = []
+#     clear_console()
+#     console.print(f"{prompt}{''.join(buffer)}", end='', style="white")
 
-            if char == '\n':
-                console.print()  # Move to the next line
-                return ''.join(buffer).strip()
-            elif char == '\b':
-                if buffer:
-                    buffer.pop()  # Handle backspace
-            else:
-                buffer.append(char)
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            printError(f"Error reading input: {e}")
-
-# Redefine print functions to use Rich
+#     while True:
+#         try:
+#             char = await asyncio.to_thread(sys.stdin.read, 1)
+#             if char == '\n':
+#                 console.print()  # Move to the next line
+#                 return ''.join(buffer).strip()
+#             elif char == '\b':
+#                 if buffer:
+#                     buffer.pop()  # Handle backspace
+#                     clear_console()
+#                     console.print(f"{prompt}{''.join(buffer)}", end='', style="white")
+#             else:
+#                 buffer.append(char)
+#                 console.print(char, end='', style="white")
+#         except asyncio.CancelledError:
+#             break
+#         except Exception as e:
+#             printError(f"Error reading input: {e}")
 
 def print(txt):
     console.print(f"[white]{txt}")
+
+def input(prompt):
+    return console.input(f"[white]{prompt}")
 
 def configUpdateMessage(txt):
     console.print(f"[green bold]📝 Config Update: {txt}")
@@ -101,7 +104,8 @@ async def shell(config):
 
     try:
         while True:
-            command = (await async_input(f"[green bold]{getUser()}@{os.uname().nodename} [blue bold]{os.getcwd()} [white]# "))
+            await updateConsoleFromConfig(config)
+            command = input(f"[green bold]{getUser()}@{os.uname().nodename} [blue bold]{os.getcwd()} [white]# ")
 
             if command.lower() == "leave":
                 print("Exiting shell...")
@@ -118,11 +122,15 @@ async def shell(config):
         printUnknownError(e)
 
 async def config_watcher():
+    """Watch and update config only if changes occur."""
+    last_config = None
     while True:
         config = await loadConfig()
-        if config:
-            await updateConsoleFromConfig(config)
-        await asyncio.sleep(0.5)
+        if config != last_config:
+            last_config = config
+            if config:
+                await updateConsoleFromConfig(config)
+        await asyncio.sleep(1)  # Increase interval to avoid excessive checks
 
 async def main():
     config = await loadConfig()
