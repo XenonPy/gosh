@@ -1,0 +1,4 @@
+[general]
+quitOnCtrlc = false
+[dangerous]
+colorScheme = "auto"
