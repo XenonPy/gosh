@@ -1,4 +1,4 @@
 [general]
 quitOnCtrlc = false
 [dangerous]
-colorScheme = "standard"
+colorScheme = "auto"

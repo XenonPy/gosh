@@ -1,16 +1,43 @@
 import os
 import sys
-import rich
 import tomli
-import threading
-import time
-from queue import Queue
+import asyncio
+import aiofiles
 from rich.console import Console
 from rich.progress import track
 from os import environ
 from sys import platform
 
 console = Console()
+
+def clear_console():
+    """Clear the console output."""
+    console.print("\033[H\033[J", end="")
+
+async def async_input(prompt):
+    """Asynchronous input with buffer handling."""
+    buffer = []
+    while True:
+        clear_console()
+        console.print(f"{prompt}{''.join(buffer)}", end='', style="white")
+        try:
+            # Read a single character asynchronously
+            char = await asyncio.to_thread(sys.stdin.read, 1)
+
+            if char == '\n':
+                console.print()  # Move to the next line
+                return ''.join(buffer).strip()
+            elif char == '\b':
+                if buffer:
+                    buffer.pop()  # Handle backspace
+            else:
+                buffer.append(char)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            printError(f"Error reading input: {e}")
+
+# Redefine print functions to use Rich
 
 def print(txt):
     console.print(f"[white]{txt}")
@@ -30,26 +57,26 @@ def printError(txt):
 
 def printUnknownError(txt):
     errorLine()
-    console.print(f"[red bold]An unknown error occurred. \n\n{txt}")
+    console.print(f"[red bold]An unknown error occurred.\n\n{txt}")
 
 def printWarning(txt):
     console.print(f"[yellow italic]Warning: [bold]{txt}")
 
-def loadConfig():
+async def loadConfig():
     try:
-        with open("./.pyshposh", "rb") as f:
-            config = tomli.load(f)
+        async with aiofiles.open("./.pyshposh", "rb") as f:
+            config = tomli.loads((await f.read()).decode())
         return config
     except tomli.TOMLDecodeError:
-        printError("Error when decoding .pyshposh config")
+        printError("Error decoding .pyshposh config")
     except FileNotFoundError:
         printWarning("Configuration file not found")
     except Exception as e:
         printUnknownError(e)
 
-def updateConsoleFromConfig(data, start=False):
+async def updateConsoleFromConfig(data, start=False):
     global console
-    newColorSystem = data["dangerous"]["colorScheme"]
+    newColorSystem = data.get("dangerous", {}).get("colorScheme", None)
     if newColorSystem in ["auto", "standard", "256", "truecolor", "windows"]:
         currentColorSystem = console.color_system
         if newColorSystem != currentColorSystem:
@@ -60,63 +87,27 @@ def updateConsoleFromConfig(data, start=False):
         return
 
 def getUser():
-    return environ["USERNAME"] if platform.startswith("win") else environ["USER"]
+    return environ.get("USERNAME", "unknown") if platform.startswith("win") else environ.get("USER", "unknown")
 
-consoleUpdateQueue = Queue()
+async def simulate_task():
+    print("Simulating a 20-second task. Try changing the config.\n")
+    for _ in track(range(20), description="Working..."):
+        await asyncio.sleep(1)
+    print("Task complete!")
 
-def backgroundUpdater():
-    while True:
-        try:
-            message = consoleUpdateQueue.get(timeout=0.5)
-            if message is None:
-                break
-            log(message)
-        except Exception:
-            pass
-
-def storeUserInput(input_text):
-    config["user_input"] = input_text
-    configUpdateMessage(f"User input stored: {input_text}")
-
-def loadUserInput():
-    return config.get("user_input", "")
-
-def shell():
+async def shell(config):
+    await updateConsoleFromConfig(config)
     log("Started [green bold]Pyshposh")
-    updater_thread = threading.Thread(target=backgroundUpdater, daemon=True)
-    updater_thread.start()
-    
-    user_input_buffer = ""
-    inactivity_timer = None
-
-    def reset_inactivity_timer():
-        nonlocal inactivity_timer
-        if inactivity_timer:
-            inactivity_timer.cancel()
-        inactivity_timer = threading.Timer(1.0, on_inactivity)
-        inactivity_timer.start()
-
-    def on_inactivity():
-        nonlocal user_input_buffer
-        storeUserInput(user_input_buffer)
-        user_input_buffer = ""
 
     try:
         while True:
-            updateConsoleFromConfig(config)
-            user_input = loadUserInput()
-            command = input(f"{user_input}").strip()
-            user_input_buffer = command  # buffer
-            reset_inactivity_timer()
+            command = (await async_input(f"[green bold]{getUser()}@{os.uname().nodename} [blue bold]{os.getcwd()} [white]# "))
 
             if command.lower() == "leave":
                 print("Exiting shell...")
                 break
             elif command.lower() == "simtask":
-                consoleUpdateQueue.put("Simulating a 20-second task. Try changing the config.\n")
-                for i in track(range(20), description="Working..."):
-                    time.sleep(1)
-                consoleUpdateQueue.put("Task complete!")
+                await simulate_task()
             else:
                 log(f"Unknown command: {command}")
     except KeyboardInterrupt:
@@ -125,15 +116,26 @@ def shell():
         print("\nExiting [green bold]Pyshposh...")
     except Exception as e:
         printUnknownError(e)
-    finally:
-        consoleUpdateQueue.put(None)
-        updater_thread.join()
 
-if __name__ == "__main__":
-    config = loadConfig()
+async def config_watcher():
+    while True:
+        config = await loadConfig()
+        if config:
+            await updateConsoleFromConfig(config)
+        await asyncio.sleep(0.5)
+
+async def main():
+    config = await loadConfig()
     if config:
-        updateConsoleFromConfig(config, start=True)
+        await updateConsoleFromConfig(config, start=True)
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print("Pyshposh requires a supported terminal to run correctly.")
         sys.exit(1)
-    shell()
+
+    config_task = asyncio.create_task(config_watcher())
+    shell_task = asyncio.create_task(shell(config))
+
+    await asyncio.gather(config_task, shell_task)
+
+if __name__ == "__main__":
+    asyncio.run(main())
